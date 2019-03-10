@@ -1,0 +1,9 @@
+[
+  {
+    "name": "mqttserver",
+    "type": "ACInput",
+    "value": "mqtt.thingspeak.com",
+    "placeholder": "MQTT broker server",
+    "label": "Server"
+  }
+]
