@@ -2,7 +2,7 @@
   {
     "name": "mqttserver",
     "type": "ACInput",
-    "value": "mqtt.thingspeak.com",
+    "value": "test.mosquitto.org",
     "placeholder": "MQTT broker server",
     "label": "Server"
   }

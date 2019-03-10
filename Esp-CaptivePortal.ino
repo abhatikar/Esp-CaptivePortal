@@ -11,6 +11,7 @@
 #include <FS.h>
 #include <PubSubClient.h>
 #include <AutoConnect.h>
+#include <EasyButton.h>
 
 #define PARAM_FILE      "/param.json"
 #define AUX_SETTING_URI "/mqtt_setting"
@@ -96,11 +97,21 @@ static const char AUX_mqtt_setting[] PROGMEM = R"raw(
         "type": "ACText"
       },
       {
+        "name": "newline",
+        "type": "ACElement",
+        "value": "<hr>"
+      },
+      {
         "name": "OK",
         "type": "ACSubmit",
         "value": "OK",
         "uri": "/_ac"
-      }
+      },
+      {
+        "name": "newline",
+        "type": "ACElement",
+        "value": "<hr>"
+      },
     ]
   }
 ]
@@ -119,10 +130,76 @@ WiFiClient   wifiClient;
 PubSubClient mqttClient(wifiClient);
 String  serverName;
 String  hostName;
-unsigned int  updateInterval = 3;
+unsigned int  updateInterval = 10;
 unsigned long lastPub = 0;
 
-//#define MQTT_USER_ID  "anyone"
+#define TIMEZONE    (3600 * 0)    // Dublin
+#define NTPServer1  "ntp.nict.jp" // NICT japan.
+#define NTPServer2  "time1.google.com"
+
+// Arduino pin where the button is connected to.
+
+#if defined(ARDUINO_ARCH_ESP32)
+#define BUTTON_PIN_RED 14
+#define BUTTON_PIN_YELLOW 15
+#define BUTTON_PIN_GREEN 25
+//#define BUTTON_PIN_BLUE 27
+
+#elif defined(ARDUINO_ARCH_ESP8266)
+#define BUTTON_PIN_YELLOW 0
+#define BUTTON_PIN_RED 2
+//#define BUTTON_PIN_BLUE 4
+#define BUTTON_PIN_GREEN 5
+#endif
+
+// Instance of the button.
+EasyButton button_yellow(BUTTON_PIN_YELLOW);
+EasyButton button_red(BUTTON_PIN_RED);
+//EasyButton button_blue(BUTTON_PIN_BLUE);
+EasyButton button_green(BUTTON_PIN_GREEN);
+
+// Callback function to be called when the button is pressed.
+void onPressed_red() {
+  Serial.println("Red (Radio) Button has been pressed!");
+
+  mqttClient.publish("/magicchair/music", "off");
+  mqttClient.publish("/magicchair/books", "off");
+  mqttClient.publish("/magicchair/radio", "on");
+}
+
+void onPressed_yellow() {
+  Serial.println("Yellow (Music) Button has been pressed!");
+
+  mqttClient.publish("/magicchair/radio", "off");
+  mqttClient.publish("/magicchair/books", "off");
+  mqttClient.publish("/magicchair/music", "on");
+}
+
+void onPressed_blue() {
+  Serial.println("Blue (Books) Button has been pressed!");
+
+  mqttClient.publish("/magicchair/radio", "off");
+  mqttClient.publish("/magicchair/music", "off");
+  mqttClient.publish("/magicchair/books", "on");
+}
+
+void onPressed_green() {
+  Serial.println("Green (Stop) Button has been pressed!");
+
+  mqttClient.publish("/magicchair/radio", "off");
+  mqttClient.publish("/magicchair/music", "off");
+  mqttClient.publish("/magicchair/books", "off");
+}
+
+
+// Callback function to be called when the button is pressed.
+void onPressedForDuration() {
+  Serial.println("on duration:Button has been pressed!");
+  mqttClient.publish("/magicchair/radio", "off");
+  mqttClient.publish("/magicchair/music", "off");
+  mqttClient.publish("/magicchair/books", "off");
+  mqttClient.publish("/magicchair/goodbye", "on");
+}
 
 bool mqttConnect() {
   static const char alphanum[] = "0123456789"
@@ -155,11 +232,6 @@ bool mqttConnect() {
     }
   }
   return false;
-}
-
-void mqttPublish(String msg) {
- // String path = String("channels/") + channelId + String("/publish/") + apiKey;
-  mqttClient.publish("test_topic", msg.c_str());
 }
 
 // Load parameters saved with  saveParams from SPIFFS into the
@@ -212,59 +284,87 @@ String saveParams(AutoConnectAux& aux, PageArgument& args) {
   AutoConnectText&  echo = aux.getElement<AutoConnectText>("parameters");
   echo.value = "Server: " + serverName;
   echo.value += mqttserver.isValid() ? String(" (OK)") : String(" (ERR)");
-  echo.value += "ESP host name: " + hostName + "<br>";
+  echo.value += "<br>ESP host name: " + hostName + "<br>";
 
   return String("");
 }
 
 void handleRoot() {
-  String  content =
-    "<html>"
-    "<head>"
-    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-    "</head>"
-    "<body>"
-    "<h1> Magic Chair Portal </h1>"
-    "<p style=\"padding-top:5px;text-align:center\">" AUTOCONNECT_LINK(COG_24) "</p>"
-    "</body>"
-    "</html>";
 
-  WiFiWebServer&  webServer = portal.host();
-  webServer.send(200, "text/html", content);
+	String  content =
+	    "<html>"
+	    "<head>"
+	    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+	    "</head>"
+	    "<body>"
+	    "<h2 align=\"center\" style=\"color:blue;margin:20px;\">Magic Chair</h2>"
+	    "<h3 align=\"center\" style=\"color:gray;margin:10px;\">{{DateTime}}</h3>"
+	    "<p style=\"padding-top:10px;text-align:center\">" AUTOCONNECT_LINK(COG_32) "</p>"
+	    "</body>"
+	    "</html>";
+	  static const char *wd[7] = { "Sun", "Mon", "Tue", "Wed", "Thr", "Fri", "Sat" };
+	  struct tm *tm;
+	  time_t  t;
+	  char    dateTime[26];
+
+	  t = time(NULL);
+	  tm = localtime(&t);
+	  sprintf(dateTime, "%04d/%02d/%02d(%s) %02d:%02d:%02d.",
+		  tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+		  wd[tm->tm_wday],
+		  tm->tm_hour, tm->tm_min, tm->tm_sec);
+	  content.replace("{{DateTime}}", String(dateTime));
+	  WiFiWebServer&  webServer = portal.host();
+	  webServer.send(200, "text/html", content);
 }
-//
-//// Clear channel using ThingSpeak's API.
-//void handleClearChannel() {
-//  HTTPClient  httpClient;
-//  WiFiClient  client;
-//  String  endpoint = serverName;
-//  endpoint.replace("mqtt", "api");
-//  //String  delUrl = "http://" + endpoint + "/channels/" + channelId + "/feeds.json?api_key=" + userKey;
-//
-////  //Serial.print("DELETE " + delUrl);
-////  if (httpClient.begin(client, delUrl)) {
-////    Serial.print(":");
-////    int resCode = httpClient.sendRequest("DELETE");
-////    String  res = httpClient.getString();
-////    httpClient.end();
-////    Serial.println(String(resCode) + "," + res);
-////  }
-////  else
-////    Serial.println(" failed");
-//
-//  // Returns the redirect response.
-//  WiFiWebServer&  webServer = portal.host();
-//  webServer.sendHeader("Location", String("http://") + webServer.client().localIP().toString() + String("/"));
-//  webServer.send(302, "text/plain", "");
-//  webServer.client().flush();
-//  webServer.client().stop();
-//}
 
 void setup() {
   delay(1000);
   Serial.begin(115200);
   Serial.println();
   SPIFFS.begin();
+
+  AutoConnectAux configParams;
+
+  File cfgParamsFile = SPIFFS.open(PARAM_FILE, "r");
+  if (cfgParamsFile) {
+    if (configParams.loadElement(cfgParamsFile))
+      Serial.println(PARAM_FILE " loaded");
+    else
+      Serial.println(PARAM_FILE " failed to load");
+    cfgParamsFile.close();
+  }
+  else {
+    Serial.println(PARAM_FILE " open failed");
+#ifdef ARDUINO_ARCH_ESP32
+    Serial.println("If you get error as 'SPIFFS: mount failed, -10025', Please modify with 'SPIFFS.begin(true)'.");
+#endif
+  }
+
+  AutoConnectInput&  mqttserver = configParams.getElement<AutoConnectInput>("mqttserver");
+
+  if (mqttserver.value.length()) {
+     Serial.println("retrieved mqttserver " + mqttserver.value);
+     serverName = mqttserver.value;
+  }
+
+  button_red.begin();
+  button_yellow.begin();
+//  button_blue.begin();
+  button_green.begin();
+
+  // Add the callback function to be called when the button is pressed.
+  button_red.onPressed(onPressed_red);
+  button_yellow.onPressed(onPressed_yellow);
+//  button_blue.onPressed(onPressed_blue);
+  button_green.onPressed(onPressed_green);
+
+  // Add the callback function to be called when the button is pressed for at least the given time.
+  button_red.onPressedFor(2000, onPressedForDuration);
+  button_yellow.onPressedFor(2000, onPressedForDuration);
+//  button_blue.onPressedFor(2000, onPressedForDuration);
+  button_green.onPressedFor(2000, onPressedForDuration);
+
 
   if (portal.load(FPSTR(AUX_mqtt_setting))) {
     AutoConnectAux* mqtt_setting = portal.aux(AUX_SETTING_URI);
@@ -282,7 +382,6 @@ void setup() {
     portal.config(config);
 
     portal.on(AUX_SETTING_URI, loadParams);
-//TODO
     portal.on(AUX_SAVE_URI, saveParams);
   }
   else
@@ -292,6 +391,7 @@ void setup() {
   if (portal.begin()) {
     Serial.println("connected:" + WiFi.SSID());
     Serial.println("IP:" + WiFi.localIP().toString());
+    configTime(TIMEZONE, 0, NTPServer1, NTPServer2);
   }
   else {
     Serial.println("connection failed:" + String(WiFi.status()));
@@ -313,10 +413,13 @@ void loop() {
       if (!mqttClient.connected()) {
         mqttConnect();
       }
-      //String item = String("field1=") + String(getStrength(7));
-      mqttPublish(String("Hello"));
       mqttClient.loop();
       lastPub = millis();
     }
+  button_red.read();
+  button_yellow.read();
+//  button_blue.read();
+  button_green.read();
+
   }
 }
