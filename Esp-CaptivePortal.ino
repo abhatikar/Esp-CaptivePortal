@@ -39,7 +39,7 @@ static const char AUX_mqtt_setting[] PROGMEM = R"raw(
       {
         "name": "caption",
         "type": "ACText",
-        "value": "Publishing the WiFi signal strength to MQTT channel. RSSI value of ESP8266 to the channel created on ThingSpeak",
+        "value": "Publishing the data to MQTT broker.",
         "style": "font-family:serif;color:#4682b4;"
       },
       {
@@ -142,21 +142,26 @@ unsigned long lastPub = 0;
 #if defined(ARDUINO_ARCH_ESP32)
 #define BUTTON_PIN_RED 14
 #define BUTTON_PIN_YELLOW 15
-#define BUTTON_PIN_GREEN 25
-//#define BUTTON_PIN_BLUE 27
+#define BUTTON_PIN_GREEN 4
+#define BUTTON_PIN_BLUE 27
 
 #elif defined(ARDUINO_ARCH_ESP8266)
-#define BUTTON_PIN_YELLOW 0
-#define BUTTON_PIN_RED 2
-//#define BUTTON_PIN_BLUE 4
-#define BUTTON_PIN_GREEN 5
+#define BUTTON_PIN_YELLOW 12
+#define BUTTON_PIN_RED 13
+#define BUTTON_PIN_BLUE 0
+#define BUTTON_PIN_GREEN 14
 #endif
 
 // Instance of the button.
 EasyButton button_yellow(BUTTON_PIN_YELLOW);
 EasyButton button_red(BUTTON_PIN_RED);
-//EasyButton button_blue(BUTTON_PIN_BLUE);
+EasyButton button_blue(BUTTON_PIN_BLUE);
 EasyButton button_green(BUTTON_PIN_GREEN);
+
+#if defined(ARDUINO_ARCH_ESP32)
+TaskHandle_t Task1;
+TaskHandle_t Task2;
+#endif
 
 // Callback function to be called when the button is pressed.
 void onPressed_red() {
@@ -190,7 +195,6 @@ void onPressed_green() {
   mqttClient.publish("/magicchair/music", "off");
   mqttClient.publish("/magicchair/books", "off");
 }
-
 
 // Callback function to be called when the button is pressed.
 void onPressedForDuration() {
@@ -228,7 +232,9 @@ bool mqttConnect() {
       Serial.println("Connection failed:" + String(mqttClient.state()));
       if (!--retry)
         break;
-      delay(3000);
+      //delay(3000);
+      delay(100);
+      yield();
     }
   }
   return false;
@@ -322,7 +328,11 @@ void setup() {
   delay(1000);
   Serial.begin(115200);
   Serial.println();
+#if defined(ARDUINO_ARCH_ESP32)
+  SPIFFS.begin(true);
+#elif defined(ARDUINO_ARCH_ESP8266)
   SPIFFS.begin();
+#endif
 
   AutoConnectAux configParams;
 
@@ -350,21 +360,20 @@ void setup() {
 
   button_red.begin();
   button_yellow.begin();
-//  button_blue.begin();
+  button_blue.begin();
   button_green.begin();
 
   // Add the callback function to be called when the button is pressed.
   button_red.onPressed(onPressed_red);
   button_yellow.onPressed(onPressed_yellow);
-//  button_blue.onPressed(onPressed_blue);
+  button_blue.onPressed(onPressed_blue);
   button_green.onPressed(onPressed_green);
 
   // Add the callback function to be called when the button is pressed for at least the given time.
   button_red.onPressedFor(2000, onPressedForDuration);
   button_yellow.onPressedFor(2000, onPressedForDuration);
-//  button_blue.onPressedFor(2000, onPressedForDuration);
+  button_blue.onPressedFor(2000, onPressedForDuration);
   button_green.onPressedFor(2000, onPressedForDuration);
-
 
   if (portal.load(FPSTR(AUX_mqtt_setting))) {
     AutoConnectAux* mqtt_setting = portal.aux(AUX_SETTING_URI);
@@ -404,22 +413,79 @@ void setup() {
   WiFiWebServer&  webServer = portal.host();
   webServer.on("/", handleRoot);
   //webServer.on(AUX_CLEAR_URI, handleClearChannel);
+
+#if defined(ARDUINO_ARCH_ESP32)
+  //create a task that will be executed in the Task1code() function, with priority 1 and executed on core 0
+  xTaskCreatePinnedToCore(
+                    Task1code,   /* Task function. */
+                    "Task1",     /* name of task. */
+                    10000,       /* Stack size of task */
+                    NULL,        /* parameter of the task */
+                    1,           /* priority of the task */
+                    &Task1,      /* Task handle to keep track of created task */
+                    0);          /* pin task to core 0 */
+  delay(500);
+
+  //create a task that will be executed in the Task2code() function, with priority 1 and executed on core 1
+  xTaskCreatePinnedToCore(
+                    Task2code,   /* Task function. */
+                    "Task2",     /* name of task. */
+                    10000,       /* Stack size of task */
+                    NULL,        /* parameter of the task */
+                    1,           /* priority of the task */
+                    &Task2,      /* Task handle to keep track of created task */
+                    1);          /* pin task to core 1 */
+    delay(500);
+#endif
 }
 
 void loop() {
-  portal.handleClient();
-  if (updateInterval > 0) {
-    if (millis() - lastPub > updateInterval) {
-      if (!mqttClient.connected()) {
-        mqttConnect();
-      }
-      mqttClient.loop();
-      lastPub = millis();
-    }
-  button_red.read();
-  button_yellow.read();
-//  button_blue.read();
-  button_green.read();
+#if defined(ARDUINO_ARCH_ESP8266)
+	portal.handleClient();
+	if (updateInterval > 0) {
+		if (millis() - lastPub > updateInterval) {
+			if (!mqttClient.connected()) {
+				mqttConnect();
+			}
+			mqttClient.loop();
+			lastPub = millis();
+		}
+		button_red.read();
+		button_yellow.read();
+		button_blue.read();
+		button_green.read();
+	}
+#endif
+}
 
+#if defined(ARDUINO_ARCH_ESP32)
+void Task1code( void * pvParameters ){
+  Serial.print("Task1 running on core ");
+  Serial.println(xPortGetCoreID());
+
+  for(;;){
+    vTaskDelay(10);
+    if (updateInterval > 0) {
+        if (millis() - lastPub > updateInterval) {
+            if (!mqttClient.connected()) {
+              mqttConnect();
+            }
+             mqttClient.loop();
+             lastPub = millis();
+        }
+      button_red.read();
+      button_yellow.read();
+      button_blue.read();
+      button_green.read();
+    }
   }
 }
+
+void Task2code( void * pvParameters ){
+  Serial.print("Task2 running on core ");
+  Serial.println(xPortGetCoreID());
+  for(;;){
+    portal.handleClient();
+  }
+}
+#endif
